@@ -1,0 +1,1 @@
+# tuya-bk7231-haxomatic
