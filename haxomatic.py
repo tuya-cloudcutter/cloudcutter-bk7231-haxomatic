@@ -269,7 +269,7 @@ def make_profile_format2(chipset, ty_cjson_parse_addr, mf_cmd_process_addr):
     payload = profile_builder.check_valid_payload(payload)
 
     datagram = profile_builder.build_network_config_packet(payload=payload)
-    datagram_padding = b'B' * (256-len(datagram))
+    datagram_padding = b'A' * (256-len(datagram))
 
     data = {
         'chip': f'{chipset}',
