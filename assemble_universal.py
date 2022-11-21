@@ -99,7 +99,7 @@ def assemble():
     device_filename = f"{manufacturer.replace(' ', '-')}-{name.replace(' ', '-')}"
     print(f"[+] Dumping device profile {device_filename}")
     with open(join(full_path, f"{device_filename}.json"), 'w') as f:
-        f.write(json.dumps(profile, indent=4))
+        f.write(json.dumps(device, indent=4))
 
 
 if __name__ == '__main__':
