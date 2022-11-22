@@ -49,13 +49,13 @@ def assemble():
 
     profile["name"] = f"{swv} - {chip}"
     profile["sub_name"] = device_class
-    profile["type"] = "Universal"
+    profile["type"] = "CLASSIC"
     profile["icon"] = icon
 
     firmware["chip"] = chip
     firmware["name"] = device_class
     firmware["version"] = swv
-    firmware["sdk"] = sdk
+    firmware["sdk"] = f"{sdk}-{bv}"
     if key is not None:
         firmware["key"] = key
 
@@ -71,11 +71,12 @@ def assemble():
 
     profile["data"] = data
 
-    universal_profile_name = f"{device_class}-{swv}-sdk-{sdk}-{bv}"
+    universal_profile_name = f"{device_class}-{swv}-sdk-{sdk}-{bv}".lower()
 
     print(f"[+] Dumping universal profile {universal_profile_name}")
     with open(join(full_path, f"{universal_profile_name}.json"), 'w') as f:
         f.write(json.dumps(profile, indent=4))
+        f.write('\n')
 
     device = {}
     device["manufacturer"] = manufacturer
@@ -100,6 +101,7 @@ def assemble():
     print(f"[+] Dumping device profile {device_filename}")
     with open(join(full_path, f"{device_filename}.json"), 'w') as f:
         f.write(json.dumps(device, indent=4))
+        f.write('\n')
 
 
 if __name__ == '__main__':
