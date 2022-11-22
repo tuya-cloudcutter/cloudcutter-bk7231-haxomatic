@@ -97,7 +97,7 @@ def assemble():
         schema_dict[f"{schema_id}"] = schema
         device["schema"] = schema_dict
 
-    device_filename = f"{manufacturer.replace(' ', '-')}-{name.replace(' ', '-')}"
+    device_filename = f"{manufacturer.replace(' ', '-')}-{name.replace(' ', '-')}".lower()
     print(f"[+] Dumping device profile {device_filename}")
     with open(join(full_path, f"{device_filename}.json"), 'w') as f:
         f.write(json.dumps(device, indent=4))
