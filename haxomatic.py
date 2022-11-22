@@ -67,10 +67,10 @@ class CodePatternFinder(object):
             start_address = self.base_address
 
         if start_address < self.base_address:
-            raise ValueError(f"Starting address {start_address:#x} cannot be less than base address {self.base_address:#x}")
+            raise ValueError(f"Starting address 0x{start_address:X} cannot be less than base address 0x{self.base_address:X}")
 
         if start_address > self.base_address + len(self.code):
-            raise ValueError(f"Starting address {start_address:#x} is higher the end of code address")
+            raise ValueError(f"Starting address 0x{start_address:X} is higher the end of code address")
 
         if (start_address % wordsize) != 0:
             raise ValueError(f"Start address must be aligned to word size {wordsize}")
@@ -227,7 +227,7 @@ def process_generic(chipset, pattern_version, payload_version, intermediate_stri
             print("[!] Preferred intermediate address contained a null byte, using available alternative")
             intermediate_addr = matcher.set_final_thumb_offset(intermediate_matches[intermediate_index + 1])
 
-    print(f"[+] Payload intermediate gadget (THUMB): {intermediate_addr:#x}")
+    print(f"[+] Payload intermediate gadget (THUMB): 0x{intermediate_addr:X}")
     print("[!] Searching for mf_cmd_process")    
 
     mf_cmd_process_code = bytes.fromhex(mf_cmd_process_string)
@@ -237,7 +237,7 @@ def process_generic(chipset, pattern_version, payload_version, intermediate_stri
         raise RuntimeError(f"Failed to find mf_cmd_process (found {len(mf_cmd_process_matches)}, expected {mf_cmd_process_count})")
 
     mf_cmd_process_addr = matcher.set_final_thumb_offset(mf_cmd_process_matches[mf_cmd_process_index])
-    print(f"[+] Payload pwn gadget (THUMB): {mf_cmd_process_addr:#x}")
+    print(f"[+] Payload pwn gadget (THUMB): 0x{mf_cmd_process_addr:X}")
     
     if payload_version == 1:
         make_profile_format1(chipset, intermediate_addr, mf_cmd_process_addr)
@@ -275,9 +275,9 @@ def make_profile_format1(chipset, intermediate_addr, mf_cmd_process_addr):
     with open(name_output_file("classic_profile.txt"), 'w') as f:
         f.write(json.dumps(data, indent=4))
     with open(name_output_file('address_finish.txt'), 'w') as f:
-        f.write(f'{intermediate_addr:#x}')
+        f.write(f'0x{intermediate_addr:X}')
     with open(name_output_file('address_datagram.txt'), 'w') as f:
-        f.write(f'{mf_cmd_process_addr:#x}')
+        f.write(f'0x{mf_cmd_process_addr:X}')
     with open(name_output_file('chip.txt'), 'w') as f:
         f.write(f'{chipset}')
     
@@ -306,9 +306,9 @@ def make_profile_format2(chipset, intermediate_addr, mf_cmd_process_addr):
     with open(name_output_file('classic_profile.txt'), 'w') as f:
         f.write(json.dumps(data, indent=4))
     with open(name_output_file('address_finish.txt'), 'w') as f:
-        f.write(f'{intermediate_addr:#x}')
+        f.write(f'0x{intermediate_addr:X}')
     with open(name_output_file('address_ssid.txt'), 'w') as f:
-        f.write(f'{mf_cmd_process_addr:#x}')
+        f.write(f'0x{mf_cmd_process_addr:X}')
     with open(name_output_file('chip.txt'), 'w') as f:
         f.write(f'{chipset}')
 
