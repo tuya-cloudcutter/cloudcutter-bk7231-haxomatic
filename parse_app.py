@@ -10,21 +10,11 @@ def name_output_file(desired_appended_name):
         return appcode_path.replace('app_pattern_scan_decrypted.bin', desired_appended_name + ".txt")
     return appcode_path + "_" + desired_appended_name + ".txt"
 
-def read_until_newline(index):
+def read_until_null_or_newline(index):
     strlen = 0
     slice_obj = slice(index, len(appcode))
     for b in appcode[slice_obj]:
-        if b != 10 and b != 13:
-            strlen += 1
-            continue
-        slice_obj = slice(index, index + strlen)
-        return appcode[slice_obj].decode('utf-8')
-
-def read_until_null(index):
-    strlen = 0
-    slice_obj = slice(index, len(appcode))
-    for b in appcode[slice_obj]:
-        if b != 0:
+        if b != 0 and b != 10 and b != 13:
             strlen += 1
             continue
         slice_obj = slice(index, index + strlen)
@@ -44,20 +34,20 @@ def bytecode_search(bytecode: bytes):
 
     return matches
 
-def read_null_to_null(index):
+def read_between_null_or_newline(index):
     startIndex = index
     while startIndex > 0:
         startIndex -= 1
-        if appcode[startIndex] == 0:
+        if appcode[startIndex] == 0 or appcode[startIndex] == 10 or appcode[startIndex] == 13:
             break
     # startIndex is now null, start after it
     startIndex += 1
-    return read_until_null(startIndex)
+    return read_until_null_or_newline(startIndex)
 
 def find_device_class(searchPhrase):
     matches = bytecode_search(searchPhrase)
     for match in matches:
-        matchText = read_null_to_null(match)
+        matchText = read_between_null_or_newline(match)
         if matchText == 'BK7231S_2M':
             continue
         if '/' in matchText:
@@ -67,20 +57,24 @@ def find_device_class(searchPhrase):
 
 def search_device_class_after_compiled_line():
     compiled_at_string = b'**********[%s] [%s] compiled at %s %s**********'
-    offset = appcode.find(compiled_at_string, 0) + len(compiled_at_string) + 1
+    offset = appcode.find(compiled_at_string, 0)
     if offset == -1:
         return ''
-    after = read_null_to_null(offset)
-    if after.count('_') > 0:
-        return after
+    offset += len(compiled_at_string) + 1
+    for _ in range(4):
+        after = read_between_null_or_newline(offset)
+        offset += len(after) + 1
+        if after.count('_') > 0:
+            return after
     return ''
 
 def search_device_class_after_bk7231n():
-    compiled_at_string = b'\0bk7231n\0'
-    offset = appcode.find(compiled_at_string, 0) + len(compiled_at_string) + 1
+    bk7231n_string = b'\0bk7231n\0'
+    offset = appcode.find(bk7231n_string, 0)
     if offset == -1:
         return ''
-    after = read_null_to_null(offset)
+    offset += len(bk7231n_string) + 1
+    after = read_between_null_or_newline(offset)
     if after.count('_') > 0:
         return after
     return ''
@@ -92,7 +86,7 @@ def search_swv_after_compiled_line():
         return ''
     offset += len(compiled_at_string) + 1
     for _ in range(4):
-        after = read_null_to_null(offset)
+        after = read_between_null_or_newline(offset)
         offset += len(after) + 1
         if after.count('.') > 1:
             return after
@@ -104,7 +98,7 @@ def search_swv_after_device_class( device_class):
         return ''
     offset += len(device_class) + 1
     for _ in range(4):
-        after = read_null_to_null(offset)
+        after = read_between_null_or_newline(offset)
         offset += len(after) + 1
         if after.count('.') > 1:
             return after
@@ -116,7 +110,7 @@ def search_key():
     # may require manual finding.
     match = re.search(b"\0key[a-z0-9]{13}\0", appcode)
     if match is not None:
-        return read_null_to_null(match.span()[0] + 1)
+        return read_between_null_or_newline(match.span()[0] + 1)
     return ''
 
 def dump():
@@ -126,7 +120,7 @@ def dump():
     sdk_line = ''
     print(f"========== {base_name} ==========")
     if b'< TUYA IOT SDK' in appcode:
-        sdk_line = read_until_newline(appcode.index(b'< TUYA IOT SDK'))
+        sdk_line = read_until_null_or_newline(appcode.index(b'< TUYA IOT SDK'))
         sdk_version = sdk_line.split()[4].split(':')[1]
         print(f"[+] SDK: {sdk_version}")
         with open(name_output_file("sdk"), 'w') as f:
